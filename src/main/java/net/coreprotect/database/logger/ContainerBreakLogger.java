@@ -3,15 +3,15 @@ package net.coreprotect.database.logger;
 import java.sql.PreparedStatement;
 import java.util.Locale;
 
-import net.coreprotect.CoreProtect;
-import net.coreprotect.config.Config;
-import net.coreprotect.event.CoreProtectPreLogEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 
+import net.coreprotect.CoreProtect;
+import net.coreprotect.config.Config;
 import net.coreprotect.config.ConfigHandler;
+import net.coreprotect.event.CoreProtectPreLogEvent;
 import net.coreprotect.utility.Util;
 
 public class ContainerBreakLogger {
