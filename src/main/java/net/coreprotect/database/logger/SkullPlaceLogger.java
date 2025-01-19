@@ -4,13 +4,17 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Locale;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Skull;
 
+import net.coreprotect.CoreProtect;
+import net.coreprotect.config.Config;
 import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.database.Database;
 import net.coreprotect.database.statement.SkullStatement;
+import net.coreprotect.event.CoreProtectPreLogEvent;
 import net.coreprotect.paper.PaperAdapter;
 
 public class SkullPlaceLogger {
@@ -24,6 +28,16 @@ public class SkullPlaceLogger {
             if (ConfigHandler.blacklist.get(user.toLowerCase(Locale.ROOT)) != null || block == null) {
                 return;
             }
+
+            CoreProtectPreLogEvent event = new CoreProtectPreLogEvent(user, block.getLocation());
+            if (Config.getGlobal().API_ENABLED && !Bukkit.isPrimaryThread()) {
+                CoreProtect.getInstance().getServer().getPluginManager().callEvent(event);
+            }
+
+            if (event.isCancelled()) {
+                return;
+            }
+
             int time = (int) (System.currentTimeMillis() / 1000L);
             Material type = block.getType();
             int skullKey = 0;

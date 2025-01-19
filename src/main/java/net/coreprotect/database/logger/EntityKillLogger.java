@@ -30,7 +30,7 @@ public class EntityKillLogger {
                 return;
             }
 
-            CoreProtectPreLogEvent event = new CoreProtectPreLogEvent(user);
+            CoreProtectPreLogEvent event = new CoreProtectPreLogEvent(user, block.getLocation());
             if (Config.getGlobal().API_ENABLED && !Bukkit.isPrimaryThread()) {
                 CoreProtect.getInstance().getServer().getPluginManager().callEvent(event);
             }

@@ -1,22 +1,36 @@
 package net.coreprotect.event;
 
+import org.bukkit.Location;
+import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
+
+import net.coreprotect.CoreProtect;
 
 public class CoreProtectPreLogEvent extends Event implements Cancellable {
 
     private static final HandlerList handlers = new HandlerList();
     private boolean cancelled = false;
     private String user;
+    private Location location;
 
-    public CoreProtectPreLogEvent(String user) {
+    public CoreProtectPreLogEvent(String user, Location location) {
         super(true); // async
         this.user = user;
+        this.location = location;
     }
 
     public String getUser() {
         return user;
+    }
+
+    public Player getPlayer() {
+        return CoreProtect.getInstance().getServer().getPlayer(user);
+    }
+
+    public Location getLocation() {
+        return location;
     }
 
     @Override
