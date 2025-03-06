@@ -181,10 +181,10 @@ public class ContainerLogger extends Queue {
                         if (Config.getGlobal().API_ENABLED && !Bukkit.isPrimaryThread()) {
                             CoreProtect.getInstance().getServer().getPluginManager().callEvent(event);
                         }
-
                         if (event.isCancelled()) {
                             return;
                         }
+                        location = event.getLocation();
 
                         int userId = UserStatement.getId(preparedStmt, event.getUser(), true);
                         int wid = WorldUtils.getWorldId(location.getWorld().getName());

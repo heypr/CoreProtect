@@ -138,6 +138,7 @@ public class ItemLogger {
                     if (event.isCancelled()) {
                         return;
                     }
+                    location = event.getLocation();
 
                     int userId = UserStatement.getId(preparedStmt, event.getUser(), true);
                     int wid = WorldUtils.getWorldId(location.getWorld().getName());

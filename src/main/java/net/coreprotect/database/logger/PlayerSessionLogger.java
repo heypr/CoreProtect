@@ -34,6 +34,7 @@ public class PlayerSessionLogger {
             if (event.isCancelled()) {
                 return;
             }
+            location = event.getLocation();
 
             int x = location.getBlockX();
             int y = location.getBlockY();

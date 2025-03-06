@@ -43,9 +43,9 @@ public class PlayerInteractLogger {
             int userId = UserStatement.getId(preparedStmt, event.getUser(), true);
             int wid = WorldUtils.getWorldId(block.getWorld().getName());
             int time = (int) (System.currentTimeMillis() / 1000L);
-            int x = block.getX();
-            int y = block.getY();
-            int z = block.getZ();
+            int x = event.getLocation().getBlockX();
+            int y = event.getLocation().getBlockY();
+            int z = event.getLocation().getBlockZ();
             int data = 0;
             BlockStatement.insert(preparedStmt, batchCount, time, userId, wid, x, y, z, type, data, null, null, 2, 0);
         }

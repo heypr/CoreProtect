@@ -51,6 +51,14 @@ public class CoreProtectPreLogEvent extends Event implements Cancellable {
         this.user = newUser;
     }
 
+    public void setLocation(Location newLocation) {
+        if (newLocation == null) {
+            throw new IllegalArgumentException("Invalid location");
+        }
+
+        this.location = newLocation;
+    }
+
     @Override
     public HandlerList getHandlers() {
         return handlers;
