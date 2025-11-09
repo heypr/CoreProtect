@@ -2,6 +2,7 @@ package net.coreprotect.bukkit;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -14,6 +15,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.event.block.SignChangeEvent;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.MerchantRecipe;
@@ -242,6 +244,28 @@ public interface BukkitInterface {
     boolean setEntityMeta(Entity entity, Object value, int count);
 
     /**
+     * Gets the wolf variant and adds it to the info list.
+     * Only implemented in Minecraft 1.21+.
+     * 
+     * @param wolf
+     *            The wolf entity
+     * @param info
+     *            The list to add the variant information to
+     */
+    void getWolfVariant(org.bukkit.entity.Wolf wolf, List<Object> info);
+
+    /**
+     * Sets the wolf variant from the provided value.
+     * Only implemented in Minecraft 1.21+.
+     * 
+     * @param wolf
+     *            The wolf entity
+     * @param value
+     *            The variant value to set
+     */
+    void setWolfVariant(org.bukkit.entity.Wolf wolf, Object value);
+
+    /**
      * Gets the frame type for an entity.
      * 
      * @param entity
@@ -410,4 +434,11 @@ public interface BukkitInterface {
      * @return The parsed name
      */
     String parseLegacyName(String name);
+
+    boolean isCrafter(InventoryType type);
+
+    boolean isCopperChest(Material material);
+
+    Set<Material> copperChestMaterials();
+
 }

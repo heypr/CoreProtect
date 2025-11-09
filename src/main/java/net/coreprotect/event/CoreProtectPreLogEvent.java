@@ -1,12 +1,9 @@
 package net.coreprotect.event;
 
 import org.bukkit.Location;
-import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
-
-import net.coreprotect.CoreProtect;
 
 public class CoreProtectPreLogEvent extends Event implements Cancellable {
 
@@ -21,12 +18,19 @@ public class CoreProtectPreLogEvent extends Event implements Cancellable {
         this.location = location;
     }
 
-    public String getUser() {
-        return user;
+    /**
+     * Backwards-compatible constructor for API v10 and earlier.
+     * Defaults location to null; listeners expecting v10 signature can still subscribe.
+     */
+    @Deprecated
+    public CoreProtectPreLogEvent(String user) {
+        super(true); // async
+        this.user = user;
+        this.location = null;
     }
 
-    public Player getPlayer() {
-        return CoreProtect.getInstance().getServer().getPlayer(user);
+    public String getUser() {
+        return user;
     }
 
     public Location getLocation() {

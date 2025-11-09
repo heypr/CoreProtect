@@ -1,7 +1,10 @@
 package net.coreprotect.bukkit;
 
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.bukkit.Color;
 import org.bukkit.DyeColor;
@@ -20,6 +23,7 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.event.block.SignChangeEvent;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.MerchantRecipe;
@@ -85,6 +89,7 @@ public class BukkitAdapter implements BukkitInterface {
     }
 
     // -------------------- Basic data conversion methods --------------------
+    public static Set<Material> EMPTY_SET = new HashSet<>(Arrays.asList());
 
     @Override
     public String parseLegacyName(String name) {
@@ -106,6 +111,16 @@ public class BukkitAdapter implements BukkitInterface {
     @Override
     public boolean setEntityMeta(Entity entity, Object value, int count) {
         return false;
+    }
+
+    @Override
+    public void getWolfVariant(org.bukkit.entity.Wolf wolf, List<Object> info) {
+        // Base implementation does nothing - Wolf variants only exist in 1.21+
+    }
+
+    @Override
+    public void setWolfVariant(org.bukkit.entity.Wolf wolf, Object value) {
+        // Base implementation does nothing - Wolf variants only exist in 1.21+
     }
 
     @Override
@@ -339,5 +354,20 @@ public class BukkitAdapter implements BukkitInterface {
     @Override
     public Object getRegistryValue(String key, Object tClass) {
         return null;
+    }
+
+    @Override
+    public boolean isCrafter(InventoryType type) {
+        return false;
+    }
+
+    @Override
+    public boolean isCopperChest(Material material) {
+        return false;
+    }
+
+    @Override
+    public Set<Material> copperChestMaterials() {
+        return EMPTY_SET;
     }
 }

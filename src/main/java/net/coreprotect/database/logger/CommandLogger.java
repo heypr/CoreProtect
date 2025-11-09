@@ -40,10 +40,11 @@ public class CommandLogger {
             location = event.getLocation();
 
             int userId = UserStatement.getId(preparedStmt, event.getUser(), true);
-            int wid = WorldUtils.getWorldId(location.getWorld().getName());
-            int x = location.getBlockX();
-            int y = location.getBlockY();
-            int z = location.getBlockZ();
+            Location eventLocation = event.getLocation();
+            int wid = WorldUtils.getWorldId(eventLocation.getWorld().getName());
+            int x = eventLocation.getBlockX();
+            int y = eventLocation.getBlockY();
+            int z = eventLocation.getBlockZ();
             CommandStatement.insert(preparedStmt, batchCount, time, userId, wid, x, y, z, message);
         }
         catch (Exception e) {

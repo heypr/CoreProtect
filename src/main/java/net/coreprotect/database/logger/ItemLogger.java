@@ -140,11 +140,12 @@ public class ItemLogger {
                     location = event.getLocation();
 
                     int userId = UserStatement.getId(preparedStmt, event.getUser(), true);
-                    int wid = WorldUtils.getWorldId(location.getWorld().getName());
+                    Location eventLocation = event.getLocation();
+                    int wid = WorldUtils.getWorldId(eventLocation.getWorld().getName());
                     int time = (int) (System.currentTimeMillis() / 1000L) - offset;
-                    int x = location.getBlockX();
-                    int y = location.getBlockY();
-                    int z = location.getBlockZ();
+                    int x = eventLocation.getBlockX();
+                    int y = eventLocation.getBlockY();
+                    int z = eventLocation.getBlockZ();
                     int typeId = MaterialUtils.getBlockId(item.getType().name(), true);
                     int amount = item.getAmount();
                     ItemStatement.insert(preparedStmt, batchCount, time, userId, wid, x, y, z, typeId, data, amount, action);
