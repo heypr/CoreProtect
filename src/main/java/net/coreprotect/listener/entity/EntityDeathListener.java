@@ -5,6 +5,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
@@ -54,6 +56,8 @@ import org.bukkit.entity.Wolf;
 import org.bukkit.entity.Zoglin;
 import org.bukkit.entity.Zombie;
 import org.bukkit.entity.ZombieVillager;
+import org.bukkit.entity.memory.MemoryKey;
+import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -73,10 +77,56 @@ import net.coreprotect.CoreProtect;
 import net.coreprotect.bukkit.BukkitAdapter;
 import net.coreprotect.config.Config;
 import net.coreprotect.consumer.Queue;
+import net.coreprotect.database.Database;
+import net.coreprotect.listener.player.EntityInteractionListener;
+import net.coreprotect.paper.PaperAdapter;
+import net.coreprotect.spigot.SpigotAdapter;
+import net.coreprotect.thread.CacheHandler;
 import net.coreprotect.thread.Scheduler;
+import net.coreprotect.utility.AttributeUtils;
+import net.coreprotect.utility.EntitySpawnTracking;
+import net.coreprotect.utility.entity.EntityUtil;
+import net.coreprotect.utility.entity.LivingEntityDetails;
 import net.coreprotect.utility.serialize.ItemMetaHandler;
 
 public final class EntityDeathListener extends Queue implements Listener {
+
+    private static final int ENTITY_KILL_DUPLICATE_THRESHOLD = 256;
+    private static final int ENTITY_KILL_DUPLICATE_WINDOW_SECONDS = 900;
+    private static final MemoryKey<?>[] VILLAGER_MEMORY_KEYS = {
+        MemoryKey.JOB_SITE,
+        MemoryKey.POTENTIAL_JOB_SITE,
+        MemoryKey.HOME,
+        MemoryKey.MEETING_POINT,
+        MemoryKey.LAST_WORKED_AT_POI
+    };
+    private static final Map<UUID, Object[]> pendingArmorStandBreaks = new ConcurrentHashMap<>();
+
+    // Armor stand contents can't be read on EntityDeathEvent (in survival mode), so the damage listeners capture them here
+    protected static void trackArmorStandBreak(Entity armorStand, String user, ItemStack[] contents) {
+        UUID uuid = armorStand.getUniqueId();
+        Object[] pendingBreak = new Object[] { user, contents };
+        pendingArmorStandBreaks.put(uuid, pendingBreak);
+
+        // onEntityDeath logs the break if the hit was lethal. Otherwise, discard the capture on the next tick, or when Folia retires
+        // the stand's scheduler (unload or any other removal). Neither callback touches the world.
+        Runnable discard = () -> pendingArmorStandBreaks.remove(uuid, pendingBreak);
+        Scheduler.scheduleSyncDelayedTask(CoreProtect.getInstance(), discard, discard, armorStand, 0);
+    }
+
+    private static void logArmorStandBreak(ArmorStand armorStand) {
+        Object[] pendingBreak = pendingArmorStandBreaks.remove(armorStand.getUniqueId());
+        if (pendingBreak == null) {
+            return;
+        }
+
+        String user = (String) pendingBreak[0];
+        ItemStack[] contents = (ItemStack[]) pendingBreak[1];
+        Location entityLocation = armorStand.getLocation();
+        Block block = entityLocation.getBlock();
+        Database.containerBreakCheck(user, Material.ARMOR_STAND, armorStand, contents, block.getLocation());
+        Queue.queueBlockBreak(user, block.getState(), Material.ARMOR_STAND, null, (int) entityLocation.getYaw());
+    }
 
     public static void parseEntityKills(String message) {
         message = message.trim().toLowerCase(Locale.ROOT);
@@ -118,24 +168,24 @@ public final class EntityDeathListener extends Queue implements Listener {
         }
 
         EntityDamageEvent damage = entity.getLastDamageCause();
-        if (damage == null) {
+        if (damage == null && e == null) {
             return;
         }
 
-        boolean isCommand = (damage.getCause() == DamageCause.VOID && entity.getLocation().getBlockY() >= BukkitAdapter.ADAPTER.getMinHeight(entity.getWorld()));
+        EntityDamageEvent.DamageCause cause = damage == null ? null : damage.getCause();
+        boolean isCommand = (cause == DamageCause.VOID && entity.getLocation().getBlockY() >= BukkitAdapter.ADAPTER.getMinHeight(entity.getWorld()));
         if (e == null) {
             e = isCommand ? "#command" : "";
         }
 
-        if (entity.getType().name().equals("GLOW_SQUID") && damage.getCause() == DamageCause.DROWNING) {
+        if (entity.getType().name().equals("GLOW_SQUID") && cause == DamageCause.DROWNING) {
             return;
         }
 
         List<DamageCause> validDamageCauses = Arrays.asList(DamageCause.SUICIDE, DamageCause.POISON, DamageCause.THORNS, DamageCause.MAGIC, DamageCause.WITHER);
 
         boolean skip = true;
-        EntityDamageEvent.DamageCause cause = damage.getCause();
-        if (!Config.getConfig(entity.getWorld()).SKIP_GENERIC_DATA || (!(entity instanceof Zombie) && !(entity instanceof Skeleton)) || (validDamageCauses.contains(cause) || cause.name().equals("KILL"))) {
+        if (cause != null && (!Config.getConfig(entity.getWorld()).SKIP_GENERIC_DATA || (!(entity instanceof Zombie) && !(entity instanceof Skeleton)) || (validDamageCauses.contains(cause) || cause.name().equals("KILL")))) {
             skip = false;
         }
 
@@ -183,7 +233,7 @@ public final class EntityDeathListener extends Queue implements Listener {
                 e = "#" + attacker.getType().name().toLowerCase(Locale.ROOT);
             }
         }
-        else {
+        else if (cause != null) {
             if (cause.equals(EntityDamageEvent.DamageCause.FIRE)) {
                 e = "#fire";
             }
@@ -258,18 +308,18 @@ public final class EntityDeathListener extends Queue implements Listener {
             e = "#lightning";
         }
 
+        if (Config.getConfig(entity.getWorld()).DUPLICATE_SUPPRESSION && shouldSuppressEntityKill(e, entity, cause)) {
+            return;
+        }
+
         if (e.length() > 0) {
             List<Object> data = new ArrayList<>();
             List<Object> age = new ArrayList<>();
             List<Object> tame = new ArrayList<>();
             List<Object> attributes = new ArrayList<>();
-            List<Object> details = new ArrayList<>();
+            List<Object> details = LivingEntityDetails.serialize(entity);
             List<Object> info = new ArrayList<>();
             EntityType type = entity_type;
-
-            // Basic LivingEntity attributes
-            details.add(entity.getRemoveWhenFarAway());
-            details.add(entity.getCanPickupItems());
 
             if (entity instanceof Ageable) {
                 Ageable ageable = (Ageable) entity;
@@ -277,7 +327,6 @@ public final class EntityDeathListener extends Queue implements Listener {
                 age.add(ageable.getAgeLock());
                 age.add(ageable.isAdult());
                 age.add(ageable.canBreed());
-                age.add(null);
             }
 
             if (entity instanceof Tameable) {
@@ -290,11 +339,19 @@ public final class EntityDeathListener extends Queue implements Listener {
                 }
             }
 
+            long baselineBits = 0;
             if (entity instanceof Attributable) {
                 Attributable attributable = entity;
                 for (Attribute attribute : Lists.newArrayList(Registry.ATTRIBUTE)) {
                     AttributeInstance attributeInstance = attributable.getAttribute(attribute);
-                    if (attributeInstance != null) {
+                    if (attributeInstance == null) {
+                        continue;
+                    }
+                    int baselineBit = AttributeUtils.baselineBit(attributeInstance);
+                    if (baselineBit >= 0) {
+                        baselineBits |= 1L << baselineBit;
+                    }
+                    else {
                         List<Object> attributeData = new ArrayList<>();
                         List<Object> attributeModifiers = new ArrayList<>();
                         attributeData.add(BukkitAdapter.ADAPTER.getRegistryKey(attributeInstance.getAttribute()));
@@ -304,7 +361,9 @@ public final class EntityDeathListener extends Queue implements Listener {
                             attributeModifiers.add(modifier.serialize());
                         }
 
-                        attributeData.add(attributeModifiers);
+                        if (!attributeModifiers.isEmpty()) {
+                            attributeData.add(attributeModifiers);
+                        }
                         attributes.add(attributeData);
                     }
                 }
@@ -347,6 +406,8 @@ public final class EntityDeathListener extends Queue implements Listener {
             else if (entity instanceof Pig) {
                 Pig pig = (Pig) entity;
                 info.add(pig.hasSaddle());
+                BukkitAdapter.ADAPTER.getEntityMeta(entity, info);
+                PaperAdapter.ADAPTER.getEntityMeta(entity, info);
             }
             else if (entity instanceof Sheep) {
                 Sheep sheep = (Sheep) entity;
@@ -387,7 +448,13 @@ public final class EntityDeathListener extends Queue implements Listener {
                     List<Object> itemMap = new ArrayList<>();
                     ItemStack item = merchantRecipe.getResult().clone();
                     List<List<Map<String, Object>>> metadata = ItemMetaHandler.serialize(item, item.getType(), null, 0);
-                    item.setItemMeta(null);
+                    try {
+                        if (item.hasItemMeta() && item.getItemMeta() != null) {
+                            item.setItemMeta(null);
+                        }
+                    }
+                    catch (Exception ignored) {
+                    }
                     itemMap.add(item.serialize());
                     itemMap.add(metadata);
                     recipe.add(itemMap);
@@ -399,7 +466,13 @@ public final class EntityDeathListener extends Queue implements Listener {
                         itemMap = new ArrayList<>();
                         item = ingredient.clone();
                         metadata = ItemMetaHandler.serialize(item, item.getType(), null, 0);
-                        item.setItemMeta(null);
+                        try {
+                            if (item.hasItemMeta() && item.getItemMeta() != null) {
+                                item.setItemMeta(null);
+                            }
+                        }
+                        catch (Exception ignored) {
+                        }
                         itemMap.add(item.serialize());
                         itemMap.add(metadata);
                         ingredients.add(itemMap);
@@ -408,6 +481,8 @@ public final class EntityDeathListener extends Queue implements Listener {
                     recipe.add(ingredients);
                     recipe.add(merchantRecipe.getVillagerExperience());
                     recipe.add(merchantRecipe.getPriceMultiplier());
+                    BukkitAdapter.ADAPTER.addMerchantRecipeMeta(merchantRecipe, recipe);
+                    PaperAdapter.ADAPTER.addMerchantRecipeMeta(merchantRecipe, recipe);
                     recipes.add(recipe);
                 }
 
@@ -418,6 +493,10 @@ public final class EntityDeathListener extends Queue implements Listener {
                     info.add(recipes);
                     info.add(villager.getVillagerLevel());
                     info.add(villager.getVillagerExperience());
+                    info.add(serializeVillagerMemories(villager));
+                    info.add(PaperAdapter.ADAPTER.getVillagerReputations(villager));
+                    info.add(PaperAdapter.ADAPTER.getVillagerRestocksToday(villager));
+                    info.add(SpigotAdapter.ADAPTER.getVillagerGossipDecayTime(villager));
                 }
                 else {
                     info.add(null);
@@ -533,8 +612,10 @@ public final class EntityDeathListener extends Queue implements Listener {
             }
             else {
                 BukkitAdapter.ADAPTER.getEntityMeta(entity, info);
+                PaperAdapter.ADAPTER.getEntityMeta(entity, info);
             }
 
+            trimTrailingNulls(info);
             data.add(age);
             data.add(tame);
             data.add(info);
@@ -542,6 +623,10 @@ public final class EntityDeathListener extends Queue implements Listener {
             data.add(entity.getCustomName());
             data.add(attributes);
             data.add(details);
+            data.add(EntitySpawnTracking.isTracked(entity) ? entity.getUniqueId().toString() : null);
+            data.add(null); // kill location, only stored for placed entities
+            data.add(EntityUtil.BASELINE_ATTRIBUTES);
+            data.add(baselineBits);
 
             if (!(entity instanceof Player)) {
                 Queue.queueEntityKill(e, entity.getLocation(), data, type);
@@ -550,6 +635,60 @@ public final class EntityDeathListener extends Queue implements Listener {
                 Queue.queuePlayerKill(e, entity.getLocation(), entity.getName());
             }
         }
+    }
+
+    private static void trimTrailingNulls(List<Object> values) {
+        while (!values.isEmpty() && values.get(values.size() - 1) == null) {
+            values.remove(values.size() - 1);
+        }
+    }
+
+    private static List<Object> serializeVillagerMemories(Villager villager) {
+        List<Object> memories = new ArrayList<>();
+        for (MemoryKey<?> key : VILLAGER_MEMORY_KEYS) {
+            addVillagerMemory(villager, memories, key);
+        }
+
+        return memories;
+    }
+
+    private static <T> void addVillagerMemory(Villager villager, List<Object> memories, MemoryKey<T> key) {
+        T value = villager.getMemory(key);
+        if (value == null) {
+            return;
+        }
+
+        List<Object> memory = new ArrayList<>();
+        memory.add(key.getKey().toString());
+        if (value instanceof Location) {
+            memory.add(serializeMemoryLocation((Location) value));
+        }
+        else {
+            memory.add(value);
+        }
+        memories.add(memory);
+    }
+
+    private static List<Object> serializeMemoryLocation(Location location) {
+        List<Object> data = new ArrayList<>();
+        World world = location.getWorld();
+        data.add(world == null ? "" : world.getName());
+        data.add(location.getBlockX());
+        data.add(location.getBlockY());
+        data.add(location.getBlockZ());
+        return data;
+    }
+
+    private static boolean shouldSuppressEntityKill(String user, LivingEntity entity, DamageCause cause) {
+        if (user == null || !user.startsWith("#") || "#command".equals(user)) {
+            return false;
+        }
+
+        Location location = entity.getLocation();
+        String causeName = cause == null ? "UNKNOWN" : cause.name();
+        String customName = entity.getCustomName();
+        String signature = location.getWorld().getUID().toString() + "." + location.getBlockX() + "." + location.getBlockY() + "." + location.getBlockZ() + "." + user + "." + entity.getType().name() + "." + causeName + "." + (customName == null ? "-" : customName);
+        return CacheHandler.shouldSuppressRepeat(CacheHandler.entityKillDuplicateCache, signature, ENTITY_KILL_DUPLICATE_THRESHOLD, ENTITY_KILL_DUPLICATE_WINDOW_SECONDS);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -567,6 +706,16 @@ public final class EntityDeathListener extends Queue implements Listener {
         LivingEntity entity = event.getEntity();
         if (entity == null) {
             return;
+        }
+
+        if (EntitySpawnTracking.isTrackedOrPendingIdentity(entity)) {
+            EntityInteractionListener.flushPendingInteractions(entity);
+            Queue.queueEntitySpawnRemoved(entity);
+            EntitySpawnTracking.clearTracking(entity.getUniqueId());
+        }
+
+        if (entity instanceof ArmorStand && !(event instanceof Cancellable && ((Cancellable) event).isCancelled())) {
+            logArmorStandBreak((ArmorStand) entity);
         }
 
         logEntityDeath(entity, null);

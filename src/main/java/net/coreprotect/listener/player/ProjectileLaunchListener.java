@@ -1,10 +1,8 @@
 package net.coreprotect.listener.player;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -36,22 +34,18 @@ public final class ProjectileLaunchListener extends Queue implements Listener {
         }
 
         String loggingItemId = user.toLowerCase(Locale.ROOT) + "." + location.getBlockX() + "." + location.getBlockY() + "." + location.getBlockZ();
-        int itemId = getItemId(loggingItemId);
 
         itemStack = itemStack.clone();
         if (amount > 0) {
             itemStack.setAmount(amount);
         }
 
+        int itemId;
         if (action == ItemLogger.ITEM_SHOOT) {
-            List<ItemStack> list = ConfigHandler.itemsShot.getOrDefault(loggingItemId, new ArrayList<>());
-            list.add(itemStack);
-            ConfigHandler.itemsShot.put(loggingItemId, list);
+            itemId = addPendingItems(ConfigHandler.itemsShot, loggingItemId, itemStack);
         }
         else {
-            List<ItemStack> list = ConfigHandler.itemsThrown.getOrDefault(loggingItemId, new ArrayList<>());
-            list.add(itemStack);
-            ConfigHandler.itemsThrown.put(loggingItemId, list);
+            itemId = addPendingItems(ConfigHandler.itemsThrown, loggingItemId, itemStack);
         }
 
         int time = (int) (System.currentTimeMillis() / 1000L) + delay;
@@ -68,7 +62,7 @@ public final class ProjectileLaunchListener extends Queue implements Listener {
             String name = pair.getKey();
             Object[] data = pair.getValue();
             ItemStack itemStack = (ItemStack) data[3];
-            Material entityMaterial = EntityUtils.getEntityMaterial(event.getEntityType());
+            Material entityMaterial = EntityUtils.getEntityMaterial(event.getEntity());
             boolean isBow = BOWS.contains(itemStack.getType());
             if ((data[1].equals(key) || data[2].equals(key)) && (entityMaterial == itemStack.getType() || (itemStack.getType() == Material.LINGERING_POTION && entityMaterial == Material.SPLASH_POTION) || isBow)) {
                 boolean thrownItem = (itemStack.getType() != Material.FIREWORK_ROCKET && !isBow);

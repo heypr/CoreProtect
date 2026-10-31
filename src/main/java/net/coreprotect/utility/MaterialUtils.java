@@ -4,6 +4,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import org.bukkit.Material;
+import org.bukkit.entity.Painting;
 
 import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.consumer.Queue;
@@ -23,6 +24,15 @@ public class MaterialUtils extends Queue {
         return getBlockId(material.name(), true);
     }
 
+    public static int getBlockId(String blockData, Material fallback, boolean internal) {
+        String name = BlockTypeUtils.getBlockDataKey(blockData);
+        if (name.length() == 0 && fallback != null) {
+            name = fallback.getKey().toString();
+        }
+
+        return name.length() == 0 ? -1 : getBlockId(name, internal);
+    }
+
     public static int getBlockId(String name, boolean internal) {
         int id = -1;
 
@@ -31,22 +41,33 @@ public class MaterialUtils extends Queue {
             name = NAMESPACE + name;
         }
 
+        if (ConfigHandler.databaseType.isClickHouse()) {
+            return ConfigHandler.resolveIdentifierId(ConfigHandler.CacheType.MATERIALS, name, internal);
+        }
         if (ConfigHandler.materials.get(name) != null) {
             id = ConfigHandler.materials.get(name);
         }
         else if (internal) {
-            // Check if another server has already added this material (multi-server setup)
-            id = ConfigHandler.reloadAndGetId(ConfigHandler.CacheType.MATERIALS, name);
-            if (id != -1) {
-                return id;
-            }
+            // Same monitor as reloadAndGetId, so two threads cannot allocate the same id
+            synchronized (ConfigHandler.class) {
+                Integer existing = ConfigHandler.materials.get(name);
+                if (existing != null) {
+                    return existing;
+                }
 
-            int mid = ConfigHandler.materialId + 1;
-            ConfigHandler.materials.put(name, mid);
-            ConfigHandler.materialsReversed.put(mid, name);
-            ConfigHandler.materialId = mid;
-            Queue.queueMaterialInsert(mid, name);
-            id = ConfigHandler.materials.get(name);
+                // Check if another server has already added this material (multi-server setup)
+                id = ConfigHandler.reloadAndGetId(ConfigHandler.CacheType.MATERIALS, name);
+                if (id != -1) {
+                    return id;
+                }
+
+                id = ConfigHandler.materialId + 1;
+                ConfigHandler.materials.put(name, id);
+                ConfigHandler.materialsReversed.put(id, name);
+                ConfigHandler.materialId = id;
+            }
+            // Queued outside the monitor so it is never held while the queue lock is taken
+            Queue.queueMaterialInsert(id, name);
         }
 
         return id;
@@ -56,22 +77,33 @@ public class MaterialUtils extends Queue {
         int id = -1;
         data = data.toLowerCase(Locale.ROOT).trim();
 
+        if (ConfigHandler.databaseType.isClickHouse()) {
+            return ConfigHandler.resolveIdentifierId(ConfigHandler.CacheType.BLOCKDATA, data, internal);
+        }
         if (ConfigHandler.blockdata.get(data) != null) {
             id = ConfigHandler.blockdata.get(data);
         }
         else if (internal) {
-            // Check if another server has already added this blockdata (multi-server setup)
-            id = ConfigHandler.reloadAndGetId(ConfigHandler.CacheType.BLOCKDATA, data);
-            if (id != -1) {
-                return id;
-            }
+            // Same monitor as reloadAndGetId, so two threads cannot allocate the same id
+            synchronized (ConfigHandler.class) {
+                Integer existing = ConfigHandler.blockdata.get(data);
+                if (existing != null) {
+                    return existing;
+                }
 
-            int bid = ConfigHandler.blockdataId + 1;
-            ConfigHandler.blockdata.put(data, bid);
-            ConfigHandler.blockdataReversed.put(bid, data);
-            ConfigHandler.blockdataId = bid;
-            Queue.queueBlockDataInsert(bid, data);
-            id = ConfigHandler.blockdata.get(data);
+                // Check if another server has already added this blockdata (multi-server setup)
+                id = ConfigHandler.reloadAndGetId(ConfigHandler.CacheType.BLOCKDATA, data);
+                if (id != -1) {
+                    return id;
+                }
+
+                id = ConfigHandler.blockdataId + 1;
+                ConfigHandler.blockdata.put(data, id);
+                ConfigHandler.blockdataReversed.put(id, data);
+                ConfigHandler.blockdataId = id;
+            }
+            // Queued outside the monitor so it is never held while the queue lock is taken
+            Queue.queueBlockDataInsert(id, data);
         }
 
         return id;
@@ -79,19 +111,38 @@ public class MaterialUtils extends Queue {
 
     public static String getBlockDataString(int id) {
         // Internal ID pulled from DB
+        if (ConfigHandler.databaseType.isClickHouse()) {
+            String blockdata = ConfigHandler.getIdentifierValue(ConfigHandler.CacheType.BLOCKDATA, id);
+            return blockdata == null ? "" : blockdata;
+        }
         String blockdata = "";
-        if (ConfigHandler.blockdataReversed.get(id) != null) {
-            blockdata = ConfigHandler.blockdataReversed.get(id);
+        String cachedBlockdata = ConfigHandler.blockdataReversed.get(id);
+        if (cachedBlockdata != null) {
+            blockdata = cachedBlockdata;
         }
         return blockdata;
     }
 
     public static String getBlockName(int id) {
+        if (ConfigHandler.databaseType.isClickHouse()) {
+            String name = ConfigHandler.getIdentifierValue(ConfigHandler.CacheType.MATERIALS, id);
+            return name == null ? "" : name;
+        }
         String name = "";
-        if (ConfigHandler.materialsReversed.get(id) != null) {
-            name = ConfigHandler.materialsReversed.get(id);
+        String cachedName = ConfigHandler.materialsReversed.get(id);
+        if (cachedName != null) {
+            name = cachedName;
         }
         return name;
+    }
+
+    public static String getBlockDisplayName(int id, int data) {
+        Material material = getType(id);
+        if (material != null) {
+            return StringUtils.nameFilter(material.name().toLowerCase(Locale.ROOT), data);
+        }
+
+        return getBlockName(id);
     }
 
     public static String getBlockNameShort(int id) {
@@ -105,9 +156,13 @@ public class MaterialUtils extends Queue {
 
     public static Material getType(int id) {
         // Internal ID pulled from DB
+        return id > 0 ? getTypeFromStoredName(getBlockName(id)) : null;
+    }
+
+    public static Material getTypeFromStoredName(String blockName) {
         Material material = null;
-        if (ConfigHandler.materialsReversed.get(id) != null && id > 0) {
-            String name = ConfigHandler.materialsReversed.get(id).toUpperCase(Locale.ROOT);
+        if (!blockName.isEmpty()) {
+            String name = blockName.toUpperCase(Locale.ROOT);
             if (name.contains(NAMESPACE.toUpperCase(Locale.ROOT))) {
                 name = name.split(":")[1];
             }
@@ -115,7 +170,7 @@ public class MaterialUtils extends Queue {
             name = net.coreprotect.bukkit.BukkitAdapter.ADAPTER.parseLegacyName(name);
             material = Material.getMaterial(name);
 
-            if (material == null) {
+            if (material == null && Material.getMaterial(Material.LEGACY_PREFIX + name) != null) {
                 material = Material.getMaterial(name, true);
             }
         }
@@ -133,42 +188,74 @@ public class MaterialUtils extends Queue {
             }
 
             name = net.coreprotect.bukkit.BukkitAdapter.ADAPTER.parseLegacyName(name);
-            material = Material.matchMaterial(name);
+            material = isEnumName(name) ? Material.getMaterial(name) : Material.matchMaterial(name);
         }
 
         return material;
+    }
+
+    // matchMaterial only uppercases and strips whitespace and non-word characters before getMaterial, none of which changes an A-Z, 0-9 and underscore name
+    private static boolean isEnumName(String name) {
+        for (int index = 0; index < name.length(); index++) {
+            char character = name.charAt(index);
+            if ((character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_') {
+                return false;
+            }
+        }
+
+        return !name.isEmpty();
     }
 
     public static int getArtId(String name, boolean internal) {
         int id = -1;
         name = name.toLowerCase(Locale.ROOT).trim();
 
+        if (ConfigHandler.databaseType.isClickHouse()) {
+            return ConfigHandler.resolveIdentifierId(ConfigHandler.CacheType.ART, name, internal);
+        }
         if (ConfigHandler.art.get(name) != null) {
             id = ConfigHandler.art.get(name);
         }
         else if (internal) {
-            // Check if another server has already added this art (multi-server setup)
-            id = ConfigHandler.reloadAndGetId(ConfigHandler.CacheType.ART, name);
-            if (id != -1) {
-                return id;
-            }
+            // Same monitor as reloadAndGetId, so two threads cannot allocate the same id
+            synchronized (ConfigHandler.class) {
+                Integer existing = ConfigHandler.art.get(name);
+                if (existing != null) {
+                    return existing;
+                }
 
-            int artID = ConfigHandler.artId + 1;
-            ConfigHandler.art.put(name, artID);
-            ConfigHandler.artReversed.put(artID, name);
-            ConfigHandler.artId = artID;
-            Queue.queueArtInsert(artID, name);
-            id = ConfigHandler.art.get(name);
+                // Check if another server has already added this art (multi-server setup)
+                id = ConfigHandler.reloadAndGetId(ConfigHandler.CacheType.ART, name);
+                if (id != -1) {
+                    return id;
+                }
+
+                id = ConfigHandler.artId + 1;
+                ConfigHandler.art.put(name, id);
+                ConfigHandler.artReversed.put(id, name);
+                ConfigHandler.artId = id;
+            }
+            // Queued outside the monitor so it is never held while the queue lock is taken
+            Queue.queueArtInsert(id, name);
         }
 
         return id;
     }
 
+    public static String getPaintingArtName(Painting painting) {
+        return net.coreprotect.bukkit.BukkitAdapter.ADAPTER.getPaintingArtKey(painting);
+    }
+
     public static String getArtName(int id) {
         // Internal ID pulled from DB
+        if (ConfigHandler.databaseType.isClickHouse()) {
+            String artName = ConfigHandler.getIdentifierValue(ConfigHandler.CacheType.ART, id);
+            return artName == null ? "" : artName;
+        }
         String artname = "";
-        if (ConfigHandler.artReversed.get(id) != null) {
-            artname = ConfigHandler.artReversed.get(id);
+        String cachedName = ConfigHandler.artReversed.get(id);
+        if (cachedName != null) {
+            artname = cachedName;
         }
         return artname;
     }

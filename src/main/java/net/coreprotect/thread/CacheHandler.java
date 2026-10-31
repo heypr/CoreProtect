@@ -1,32 +1,99 @@
 package net.coreprotect.thread;
 
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.Location;
+import org.bukkit.World;
 
 import net.coreprotect.config.ConfigHandler;
+import net.coreprotect.utility.ErrorReporter;
 
 public class CacheHandler implements Runnable {
 
-    public static Map<String, Object[]> lookupCache = Collections.synchronizedMap(new HashMap<>());
-    public static Map<String, Object[]> breakCache = Collections.synchronizedMap(new HashMap<>());
-    public static Map<String, Object[]> interactCache = Collections.synchronizedMap(new HashMap<>());
-    public static Map<String, Object[]> entityCache = Collections.synchronizedMap(new HashMap<>());
-    public static ConcurrentHashMap<String, Object[]> pistonCache = new ConcurrentHashMap<>(16, 0.75f, 2);
-    public static ConcurrentHashMap<String, Object[]> spreadCache = new ConcurrentHashMap<>(16, 0.75f, 2);
-    public static ConcurrentHashMap<Location, Object[]> redstoneCache = new ConcurrentHashMap<>(16, 0.75f, 2);
+    public static Map<String, Object[]> lookupCache = new ConcurrentHashMap<>();
+    public static Map<String, Object[]> breakCache = new ConcurrentHashMap<>();
+    public static Map<String, Object[]> interactCache = new ConcurrentHashMap<>();
+    public static Map<String, Object[]> entityCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> pistonCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> spreadCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> containerDuplicateCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> flowDuplicateCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> bonemealDuplicateCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> entityKillDuplicateCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> redstoneCache = new ConcurrentHashMap<>();
+    public static ConcurrentHashMap<String, Object[]> fallingBlockSpawnCache = new ConcurrentHashMap<>();
+
+    private static volatile Thread thread;
+
+    public static void startThread() {
+        Thread cacheThread = new Thread(new CacheHandler(), "CoreProtect-Cache");
+        cacheThread.setDaemon(true);
+        thread = cacheThread;
+        cacheThread.start();
+    }
+
+    public static void stopThread(long timeoutMillis) {
+        Thread cacheThread = thread;
+        thread = null;
+        if (cacheThread == null) {
+            return;
+        }
+
+        cacheThread.interrupt();
+        try {
+            cacheThread.join(timeoutMillis);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public static String locationKey(Location location) {
+        if (location == null || location.getWorld() == null) {
+            return "";
+        }
+        return locationKey(location.getWorld(), location.getBlockX(), location.getBlockY(), location.getBlockZ());
+    }
+
+    public static String locationKey(World world, int x, int y, int z) {
+        return world.getUID() + ":" + x + ":" + y + ":" + z;
+    }
+
+    public static boolean shouldSuppressRepeat(ConcurrentHashMap<String, Object[]> cache, String cacheId, int threshold, int resetWindowSeconds) {
+        if (cache == null || cacheId == null || cacheId.isEmpty() || threshold <= 0) {
+            return false;
+        }
+
+        final int timestamp = (int) (System.currentTimeMillis() / 1000L);
+        Object[] result = cache.compute(cacheId, (key, value) -> {
+            int count = 1;
+            if (value != null) {
+                int previousTime = (int) value[0];
+                int previousCount = (int) value[1];
+                if (timestamp - previousTime <= resetWindowSeconds) {
+                    count = previousCount + 1;
+                }
+            }
+
+            if (count > (threshold + 1)) {
+                count = threshold + 1;
+            }
+
+            return new Object[] { timestamp, count };
+        });
+
+        return ((int) result[1]) > threshold;
+    }
 
     @SuppressWarnings({ "unchecked", "rawtypes" })
     @Override
     public void run() {
         while (ConfigHandler.serverRunning) {
             try {
-                for (int id = 0; id < 9; id++) {
+                for (int id = 0; id < 14; id++) {
                     Thread.sleep(1000);
                     int scanTime = 30;
                     Map cache = CacheHandler.lookupCache;
@@ -62,34 +129,58 @@ public class CacheHandler implements Runnable {
                         case 8:
                             // Clean up dispenserNoChange cache
                             cleanupDispenserCache();
+                            cleanupPopulatedChunks();
                             continue;
+                        case 9:
+                            cache = CacheHandler.containerDuplicateCache;
+                            scanTime = 1800; // 30 minutes
+                            break;
+                        case 10:
+                            cache = CacheHandler.flowDuplicateCache;
+                            scanTime = 900; // 15 minutes
+                            break;
+                        case 11:
+                            cache = CacheHandler.bonemealDuplicateCache;
+                            scanTime = 900; // 15 minutes
+                            break;
+                        case 12:
+                            cache = CacheHandler.entityKillDuplicateCache;
+                            scanTime = 900; // 15 minutes
+                            break;
+                        case 13:
+                            cache = CacheHandler.fallingBlockSpawnCache;
+                            scanTime = 30; // 30 seconds
+                            break;
                     }
 
                     int timestamp = (int) (System.currentTimeMillis() / 1000L) - scanTime;
-                    Iterator<Entry> iterator = cache.entrySet().iterator();
-                    while (iterator.hasNext()) {
+                    cache.values().removeIf(value -> {
                         try {
-                            Map.Entry entry = iterator.next();
-                            Object[] data = (Object[]) entry.getValue();
+                            Object[] data = (Object[]) value;
                             int time = (data[0] instanceof Long) ? (int) ((long) data[0] / 1000L) : (int) data[0];
-
-                            if (time < timestamp) {
-                                try {
-                                    iterator.remove();
-                                }
-                                catch (Exception e) {
-                                }
-                            }
+                            return time < timestamp;
+                        } catch (Exception e) {
+                            return true; // malformed entry
                         }
-                        catch (Exception e) {
-                            break;
-                        }
-                    }
+                    });
                 }
             }
-            catch (Exception e) {
-                e.printStackTrace();
+            catch (InterruptedException e) {
+                return;
             }
+            catch (Exception e) {
+                ErrorReporter.report(e);
+            }
+        }
+    }
+
+    /**
+     * Removes populated chunk entries older than 240 seconds, the longest window BlockPlaceLogger checks them against
+     */
+    private void cleanupPopulatedChunks() {
+        long expired = (System.currentTimeMillis() / 1000L) - 240;
+        for (ConcurrentHashMap<Long, Long> chunks : ConfigHandler.populatedChunks.values()) {
+            chunks.values().removeIf(populatedAt -> populatedAt < expired);
         }
     }
 
@@ -142,7 +233,7 @@ public class CacheHandler implements Runnable {
             }
         }
         catch (Exception e) {
-            e.printStackTrace();
+            ErrorReporter.report(e);
         }
     }
 }

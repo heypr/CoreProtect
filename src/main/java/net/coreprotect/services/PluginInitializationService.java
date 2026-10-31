@@ -9,23 +9,30 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import net.coreprotect.CoreProtect;
 import net.coreprotect.command.CommandHandler;
+import net.coreprotect.command.PurgeCommand;
 import net.coreprotect.command.TabHandler;
-import net.coreprotect.config.Config;
 import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.consumer.Consumer;
 import net.coreprotect.language.Language;
 import net.coreprotect.language.Phrase;
 import net.coreprotect.listener.ListenerHandler;
+import net.coreprotect.listener.player.inspector.BaseInspector;
 import net.coreprotect.thread.CacheHandler;
 import net.coreprotect.thread.NetworkHandler;
 import net.coreprotect.thread.Scheduler;
+import net.coreprotect.thread.TickTimeMonitor;
 import net.coreprotect.utility.Chat;
 import net.coreprotect.utility.ChatUtils;
+import net.coreprotect.utility.Extensions;
+import net.coreprotect.utility.EntitySpawnTracking;
+import net.coreprotect.utility.ErrorReporter;
 
 /**
  * Service responsible for plugin initialization tasks
  */
 public class PluginInitializationService {
+
+    private static volatile Metrics metrics;
 
     private PluginInitializationService() {
         throw new IllegalStateException("Utility class");
@@ -50,8 +57,8 @@ public class PluginInitializationService {
 
         try {
             // Initialize core components
+            PurgeCommand.resetShutdownCancellation();
             Consumer.initialize();
-            new ListenerHandler(plugin);
 
             // Register commands
             registerCommands(plugin);
@@ -61,9 +68,12 @@ public class PluginInitializationService {
 
             // Initialize configuration
             start = ConfigHandler.performInitialization(true);
+            if (start) {
+                new ListenerHandler(plugin);
+            }
         }
         catch (Exception e) {
-            e.printStackTrace();
+            ErrorReporter.report(e);
             return false;
         }
 
@@ -116,11 +126,14 @@ public class PluginInitializationService {
         PluginDescriptionFile pluginDescription = plugin.getDescription();
         ChatUtils.sendConsoleComponentStartup(Bukkit.getServer().getConsoleSender(), Phrase.build(Phrase.ENABLE_SUCCESS, ConfigHandler.EDITION_NAME));
 
-        if (Config.getGlobal().MYSQL) {
+        if (ConfigHandler.databaseType.isMySQL()) {
             Chat.console(Phrase.build(Phrase.USING_MYSQL));
         }
-        else {
+        else if (ConfigHandler.databaseType.isSQLite()) {
             Chat.console(Phrase.build(Phrase.USING_SQLITE));
+        }
+        else {
+            Chat.console(Phrase.build(Phrase.USING_DATABASE, ConfigHandler.databaseType.getDisplayName()));
         }
 
         Chat.console("--------------------");
@@ -143,16 +156,22 @@ public class PluginInitializationService {
                 networkHandler.start();
             }
             catch (Exception e) {
-                e.printStackTrace();
+                ErrorReporter.report(e);
             }
         }, 0);
 
-        // Start cache cleanup thread
-        Thread cacheCleanUpThread = new Thread(new CacheHandler());
-        cacheCleanUpThread.start();
+        // Start tick time monitor (only used where native tick timings are unavailable)
+        TickTimeMonitor.initialize(plugin);
 
-        // Start consumer
+        // Start cache cleanup thread
+        CacheHandler.startThread();
+
+        // Start inspector lookup threads
+        BaseInspector.startLookups();
+
         Consumer.startConsumer();
+        EntitySpawnTracking.initializeLoadedEntities();
+        Extensions.startBackgroundService();
     }
 
     /**
@@ -163,10 +182,28 @@ public class PluginInitializationService {
      */
     private static void enableMetrics(JavaPlugin plugin) {
         try {
-            new Metrics(plugin, 2876);
+            metrics = new Metrics(plugin, 2876);
         }
         catch (Exception e) {
             // Failed to connect to bStats server or something else went wrong
+        }
+    }
+
+    /**
+     * Stops the bStats scheduler so its thread does not outlive a disable
+     */
+    public static void disableMetrics() {
+        Metrics current = metrics;
+        metrics = null;
+        if (current == null) {
+            return;
+        }
+
+        try {
+            current.shutdown();
+        }
+        catch (Exception e) {
+            ErrorReporter.report(e);
         }
     }
 }

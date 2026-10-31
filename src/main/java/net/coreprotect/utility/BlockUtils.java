@@ -3,8 +3,8 @@ package net.coreprotect.utility;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.Material;
 import org.bukkit.block.Banner;
@@ -22,60 +22,123 @@ import org.bukkit.inventory.ItemStack;
 
 import net.coreprotect.CoreProtect;
 import net.coreprotect.bukkit.BukkitAdapter;
+import net.coreprotect.config.ConfigHandler;
+import net.coreprotect.model.PendingBlockChange;
 import net.coreprotect.thread.Scheduler;
 
 public class BlockUtils {
 
-    private static final String NAMESPACE = "minecraft:";
+    private static final int BLOCK_DATA_CACHE_LIMIT = 4096;
+    private static volatile BlockDataCache blockDataCache;
 
     private BlockUtils() {
         throw new IllegalStateException("Utility class");
     }
 
     public static byte[] stringToByteData(String string, int type) {
-        byte[] result = null;
-        if (string != null) {
-            Material material = MaterialUtils.getType(type);
-            if (material == null) {
-                return result;
-            }
-
-            if (material.isBlock() && !createBlockData(material).getAsString().equals(string) && string.startsWith(NAMESPACE + material.name().toLowerCase(Locale.ROOT) + "[") && string.endsWith("]")) {
-                String substring = string.substring(material.name().length() + 11, string.length() - 1);
-                String[] blockDataSplit = substring.split(",");
-                ArrayList<String> blockDataArray = new ArrayList<>();
-                for (String data : blockDataSplit) {
-                    int id = MaterialUtils.getBlockdataId(data, true);
-                    if (id > -1) {
-                        blockDataArray.add(Integer.toString(id));
-                    }
-                }
-                string = String.join(",", blockDataArray);
-            }
-            else if (!string.contains(":") && (material == Material.PAINTING || BukkitAdapter.ADAPTER.isItemFrame(material))) {
-                int id = MaterialUtils.getBlockdataId(string, true);
-                if (id > -1) {
-                    string = Integer.toString(id);
-                }
-                else {
-                    return result;
-                }
-            }
-            else {
-                return result;
-            }
-
-            result = string.getBytes(StandardCharsets.UTF_8);
+        if (string == null) {
+            return null;
         }
 
+        // ClickHouse uncaches identifiers when a batch is discarded, so a cached encoding could point at an unpublished id
+        Map<String, CachedBlockData> cache = ConfigHandler.databaseType.isClickHouse() ? null : blockDataCache();
+        if (cache != null) {
+            CachedBlockData cached = cache.get(string);
+            if (cached != null && cached.type == type) {
+                return cached.data;
+            }
+        }
+
+        byte[] result = null;
+        boolean resolved = true;
+        Material material = MaterialUtils.getType(type);
+        String blockKey = MaterialUtils.getBlockName(type);
+        if ((blockKey == null || blockKey.length() == 0) && material != null) {
+            blockKey = material.getKey().toString();
+        }
+        if (blockKey == null || blockKey.length() == 0) {
+            return null;
+        }
+
+        BlockData defaultBlockData = createBlockData(type);
+        if (defaultBlockData != null && !defaultBlockData.getAsString().equals(string) && string.startsWith(blockKey + "[") && string.endsWith("]")) {
+            String substring = string.substring(blockKey.length() + 1, string.length() - 1);
+            String[] blockDataSplit = substring.split(",");
+            ArrayList<String> blockDataArray = new ArrayList<>();
+            for (String data : blockDataSplit) {
+                int id = MaterialUtils.getBlockdataId(data, true);
+                if (id > -1) {
+                    blockDataArray.add(Integer.toString(id));
+                }
+                else {
+                    resolved = false;
+                }
+            }
+            result = String.join(",", blockDataArray).getBytes(StandardCharsets.UTF_8);
+        }
+        else if (material != null && !string.contains(":") && (material == Material.PAINTING || BukkitAdapter.ADAPTER.isItemFrame(material))) {
+            int id = MaterialUtils.getBlockdataId(string, true);
+            if (id > -1) {
+                result = Integer.toString(id).getBytes(StandardCharsets.UTF_8);
+            }
+            else {
+                resolved = false;
+            }
+        }
+
+        if (cache != null && resolved) {
+            if (cache.size() >= BLOCK_DATA_CACHE_LIMIT) {
+                cache.clear();
+            }
+            cache.put(string, new CachedBlockData(type, result));
+        }
         return result;
+    }
+
+    // Loading the material or blockdata maps assigns new map instances, which starts a new cache
+    private static Map<String, CachedBlockData> blockDataCache() {
+        BlockDataCache cache = blockDataCache;
+        Map<Integer, String> materials = ConfigHandler.materialsReversed;
+        Map<String, Integer> blockdata = ConfigHandler.blockdata;
+        if (cache == null || cache.materials != materials || cache.blockdata != blockdata) {
+            cache = new BlockDataCache(materials, blockdata);
+            blockDataCache = cache;
+        }
+        return cache.entries;
+    }
+
+    private static final class BlockDataCache {
+
+        private final Map<Integer, String> materials;
+        private final Map<String, Integer> blockdata;
+        private final Map<String, CachedBlockData> entries = new ConcurrentHashMap<>();
+
+        private BlockDataCache(Map<Integer, String> materials, Map<String, Integer> blockdata) {
+            this.materials = materials;
+            this.blockdata = blockdata;
+        }
+    }
+
+    private static final class CachedBlockData {
+
+        private final int type;
+        private final byte[] data;
+
+        private CachedBlockData(int type, byte[] data) {
+            this.type = type;
+            this.data = data;
+        }
     }
 
     public static String byteDataToString(byte[] data, int type) {
         String result = "";
         if (data != null) {
             Material material = MaterialUtils.getType(type);
-            if (material == null) {
+            String blockKey = MaterialUtils.getBlockName(type);
+            if ((blockKey == null || blockKey.length() == 0) && material != null) {
+                blockKey = material.getKey().toString();
+            }
+            if (blockKey == null || blockKey.length() == 0) {
                 return result;
             }
 
@@ -94,11 +157,11 @@ public class BlockUtils {
                         }
                     }
 
-                    if (material == Material.PAINTING || BukkitAdapter.ADAPTER.isItemFrame(material)) {
+                    if (material != null && (material == Material.PAINTING || BukkitAdapter.ADAPTER.isItemFrame(material))) {
                         result = String.join(",", blockDataArray);
                     }
                     else {
-                        result = NAMESPACE + material.name().toLowerCase(Locale.ROOT) + "[" + String.join(",", blockDataArray) + "]";
+                        result = blockKey + "[" + String.join(",", blockDataArray) + "]";
                     }
                 }
                 else {
@@ -161,9 +224,21 @@ public class BlockUtils {
         }
     }
 
-    public static void prepareTypeAndData(Map<Block, BlockData> map, Block block, Material type, BlockData blockData, boolean update) {
+    public static BlockData createBlockData(int type) {
+        Material material = MaterialUtils.getType(type);
+        if (material != null && material.isBlock()) {
+            return createBlockData(material);
+        }
+
+        return BlockTypeUtils.createBlockData(MaterialUtils.getBlockName(type));
+    }
+
+    public static void prepareTypeAndData(Map<Block, PendingBlockChange> map, Block block, Material type, BlockData blockData, boolean update) {
         if (blockData == null) {
             blockData = createBlockData(type);
+        }
+        if (blockData == null) {
+            return;
         }
 
         if (!update) {
@@ -171,7 +246,16 @@ public class BlockUtils {
             map.remove(block);
         }
         else {
-            map.put(block, blockData);
+            map.put(block, new PendingBlockChange(blockData, true));
+        }
+    }
+
+    public static void queueTypeAndData(Map<Block, PendingBlockChange> map, Block block, Material type, BlockData blockData, boolean applyPhysics) {
+        if (blockData == null) {
+            blockData = createBlockData(type);
+        }
+        if (blockData != null) {
+            map.put(block, new PendingBlockChange(blockData, applyPhysics));
         }
     }
 
@@ -181,7 +265,22 @@ public class BlockUtils {
         }
 
         if (blockData != null) {
-            block.setBlockData(blockData, update);
+            try {
+                block.setBlockData(blockData, update);
+            }
+            catch (RuntimeException e) {
+                if (!update) {
+                    throw e;
+                }
+
+                try {
+                    block.setBlockData(blockData, false);
+                }
+                catch (RuntimeException retryException) {
+                    e.addSuppressed(retryException);
+                    throw e;
+                }
+            }
         }
     }
 
@@ -197,7 +296,7 @@ public class BlockUtils {
                 block.update();
             }
             catch (Exception e) {
-                e.printStackTrace();
+                ErrorReporter.report(e);
             }
         }, block.getLocation());
     }
@@ -220,7 +319,7 @@ public class BlockUtils {
             }
         }
         catch (Exception e) {
-            e.printStackTrace();
+            ErrorReporter.report(e);
         }
         return inventory;
     }
@@ -257,7 +356,7 @@ public class BlockUtils {
             }
         }
         catch (Exception e) {
-            e.printStackTrace();
+            ErrorReporter.report(e);
         }
 
         if (meta.isEmpty()) {
@@ -272,7 +371,7 @@ public class BlockUtils {
             contents = new ItemStack[] { blockState.getRecord() };
         }
         catch (Exception e) {
-            e.printStackTrace();
+            ErrorReporter.report(e);
         }
         return contents;
     }

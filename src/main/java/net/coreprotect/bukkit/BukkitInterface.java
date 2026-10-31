@@ -3,10 +3,15 @@ package net.coreprotect.bukkit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
+import org.bukkit.Art;
+import org.bukkit.Chunk;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Sign;
 import org.bukkit.block.data.BlockData;
@@ -14,6 +19,11 @@ import org.bukkit.entity.Arrow;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Painting;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.Villager;
+import org.bukkit.event.Event;
+import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -74,6 +84,33 @@ public interface BukkitInterface {
      */
     Material getBucketContents(Material material);
 
+    /**
+     * Checks whether the runtime supports and contains a block type key.
+     *
+     * @param key
+     *            The namespaced block key
+     * @return true if the block type exists, false otherwise
+     */
+    boolean hasBlockType(String key);
+
+    /**
+     * Creates default block data for a block type key.
+     *
+     * @param key
+     *            The namespaced block key
+     * @return The block data, or null if unsupported/unavailable
+     */
+    BlockData createBlockData(String key);
+
+    /**
+     * Creates block data from a serialized block data string.
+     *
+     * @param blockData
+     *            The serialized block data
+     * @return The block data, or null if unsupported/unavailable
+     */
+    BlockData createBlockDataFromString(String blockData);
+
     // --------------------------------------------------------------------------
     // Material type checking methods
     // --------------------------------------------------------------------------
@@ -132,6 +169,19 @@ public interface BukkitInterface {
      */
     boolean isChiseledBookshelf(Material material);
 
+
+    /**
+     * Checks if a material is a shelf of any wood kind.
+     * 
+     * @param material
+     *            The material to check
+     * @return true if the material is a shelf, false otherwise
+     */
+    boolean isShelf(Material material);
+
+    List<Location> getShelfInteractionLocations(Block block, BlockFace blockFace);
+
+
     /**
      * Checks if a material is a bookshelf book.
      * 
@@ -140,6 +190,17 @@ public interface BukkitInterface {
      * @return true if the material is a bookshelf book, false otherwise
      */
     boolean isBookshelfBook(Material material);
+
+
+    /**
+     * Checks if a material is a bundle.
+     * 
+     * @param material
+     *            The material to check
+     * @return true if the material is a bundle, false otherwise
+     */
+    boolean isBundle(Material material);
+
 
     /**
      * Gets the seeds material for a plant material.
@@ -193,6 +254,8 @@ public interface BukkitInterface {
      */
     boolean setItemMeta(Material rowType, ItemStack itemstack, List<Map<String, Object>> map);
 
+    String getItemName(ItemMeta itemMeta);
+
     /**
      * Gets a book from a chiseled bookshelf.
      * 
@@ -220,6 +283,15 @@ public interface BukkitInterface {
     // --------------------------------------------------------------------------
 
     /**
+     * Checks whether a loaded chunk's entity data is ready to query.
+     *
+     * @param chunk
+     *            The loaded chunk
+     * @return true when entity data is ready
+     */
+    boolean isChunkEntitiesLoaded(Chunk chunk);
+
+    /**
      * Gets metadata from a living entity.
      * 
      * @param entity
@@ -242,6 +314,12 @@ public interface BukkitInterface {
      * @return true if metadata was set, false otherwise
      */
     boolean setEntityMeta(Entity entity, Object value, int count);
+
+    void addMerchantRecipeMeta(MerchantRecipe recipe, List<Object> recipeData);
+
+    void setMerchantRecipeMeta(MerchantRecipe recipe, List<?> recipeData);
+
+    void refreshVillagerBrain(Villager villager);
 
     /**
      * Gets the wolf variant and adds it to the info list.
@@ -300,6 +378,21 @@ public interface BukkitInterface {
      * @return The frame class
      */
     Class<?> getFrameClass(Material material);
+
+    /**
+     * Spawns an entity, running a function on it before it is added to the world.
+     * 
+     * @param world
+     *            The world
+     * @param location
+     *            The spawn location
+     * @param entityClass
+     *            The entity class
+     * @param function
+     *            The function to run before the entity is added
+     * @return The spawned entity
+     */
+    <T extends Entity> T spawn(World world, Location location, Class<T> entityClass, Consumer<? super T> function);
 
     // --------------------------------------------------------------------------
     // Sign methods
@@ -402,6 +495,29 @@ public interface BukkitInterface {
      */
     boolean isSignFront(SignChangeEvent event);
 
+    Boolean getSignInteractionSide(Sign sign, Player player);
+
+
+
+    /**
+     * Checks whether an explosion event should be logged or not. (i.e. wind charge explosions)
+     * 
+     * @param event
+     *            The explosion event (Block or Entity ExplodeEvent)
+     * @return true if the explosion should affect blocks
+     */
+    boolean shouldLogExplosion(Event event);
+
+
+    /**
+     * Gets the material of the block that exploded
+     * 
+     * @param event
+     *            The block explosion event
+     * @return the material of the block that caused the explosion
+     */
+    Material getExplodedBlock(BlockExplodeEvent event);
+
     // --------------------------------------------------------------------------
     // Registry methods
     // --------------------------------------------------------------------------
@@ -426,6 +542,10 @@ public interface BukkitInterface {
      */
     Object getRegistryValue(String key, Object tClass);
 
+    String getPaintingArtKey(Painting painting);
+
+    Art getPaintingArt(String name);
+
     /**
      * Parses a legacy material name.
      * 
@@ -440,5 +560,7 @@ public interface BukkitInterface {
     boolean isCopperChest(Material material);
 
     Set<Material> copperChestMaterials();
+
+    Set<Material> shelfMaterials();
 
 }

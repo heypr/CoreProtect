@@ -16,8 +16,8 @@ import org.bukkit.inventory.ItemStack;
 
 import net.coreprotect.config.Config;
 import net.coreprotect.consumer.Queue;
-import net.coreprotect.database.Database;
 import net.coreprotect.listener.player.PlayerInteractEntityListener;
+import net.coreprotect.utility.ItemUtils;
 
 public final class EntityDamageByBlockListener extends Queue implements Listener {
 
@@ -52,8 +52,17 @@ public final class EntityDamageByBlockListener extends Queue implements Listener
             }
         }
         else if (entity instanceof ArmorStand && Config.getConfig(entity.getWorld()).BLOCK_BREAK) {
-            Database.containerBreakCheck(user, Material.ARMOR_STAND, entity, null, block.getLocation());
-            Queue.queueBlockBreak(user, block.getState(), Material.ARMOR_STAND, null, (int) entity.getLocation().getYaw());
+            ArmorStand armorStand = (ArmorStand) entity;
+            boolean lethalDamage = armorStand.isDead();
+            if (!lethalDamage) {
+                double finalDamage = event.getFinalDamage();
+                lethalDamage = finalDamage > 0.0D && finalDamage >= armorStand.getHealth();
+            }
+
+            if (lethalDamage && Config.getConfig(entity.getWorld()).ITEM_TRANSACTIONS) {
+                ItemStack[] contents = ItemUtils.getContainerContents(Material.ARMOR_STAND, armorStand, block.getLocation());
+                EntityDeathListener.trackArmorStandBreak(armorStand, user, contents);
+            }
         }
         else if (entity instanceof EnderCrystal && Config.getConfig(entity.getWorld()).BLOCK_BREAK) {
             EnderCrystal crystal = (EnderCrystal) event.getEntity();
